@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevSuite PRO · Extractor UltraRobusto</title>
+    <!-- Dependencias (JSZip, js-yaml, etc.) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+    <!-- CodeMirror 6 -->
+    <script type="importmap">
+        {
+            "imports": {
+                "codemirror": "https://esm.sh/codemirror@6.0.1",
+                "@codemirror/lang-python": "https://esm.sh/@codemirror/lang-python@6.1.6",
+                "@codemirror/lang-javascript": "https://esm.sh/@codemirror/lang-javascript@6.2.2",
+                "@codemirror/lang-html": "https://esm.sh/@codemirror/lang-html@6.4.9",
+                "@codemirror/lang-css": "https://esm.sh/@codemirror/lang-css@6.2.1",
+                "@codemirror/lang-json": "https://esm.sh/@codemirror/lang-json@6.0.1",
+                "@codemirror/lang-yaml": "https://esm.sh/@codemirror/lang-yaml@6.1.1",
+                "@codemirror/lang-markdown": "https://esm.sh/@codemirror/lang-markdown@6.2.5",
+                "@codemirror/theme-one-dark": "https://esm.sh/@codemirror/theme-one-dark@6.1.2",
+                "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete@6.16.0",
+                "@codemirror/search": "https://esm.sh/@codemirror/search@6.5.6",
+                "@codemirror/commands": "https://esm.sh/@codemirror/commands@6.5.0",
+                "@codemirror/view": "https://esm.sh/@codemirror/view@6.26.3"
+            }
+        }
+    </script>
+    <style>
+        * { box-sizing: border-box; margin: 0; }
+        body, html { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; background: #1e1e2f; color: #e0e0e0; overflow: hidden; }
+        #app { display: flex; height: 100vh; flex-direction: column; }
+        .toolbar { background: #2d2d44; padding: 8px 16px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #444; flex-wrap: wrap; }
+        .main-layout { display: flex; flex: 1; overflow: hidden; }
+        .panel { background: #252538; border-right: 1px solid #3a3a55; }
+        .panel-left { width: 260px; display: flex; flex-direction: column; }
+        .panel-center { flex: 1; display: flex; flex-direction: column; background: #1e1e2f; }
+        .panel-header { padding: 12px 16px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; font-size: 13px; color: #a0b0c0; border-bottom: 1px solid #3a3a55; }
+        .file-list { flex: 1; overflow-y: auto; padding: 8px; }
+        .file-item { padding: 6px 12px; cursor: pointer; border-radius: 6px; display: flex; align-items: center; gap: 8px; font-size: 14px; color: #c0c0d0; }
+        .file-item:hover { background: #3a3a60; }
+        .tab-bar { display: flex; background: #2d2d44; border-bottom: 1px solid #3a3a55; overflow-x: auto; }
+        .tab { padding: 8px 16px; cursor: pointer; border-right: 1px solid #3a3a55; display: flex; align-items: center; gap: 8px; background: #252538; color: #a0a0c0; }
+        .tab.active { background: #1e1e2f; color: white; border-bottom: 2px solid #5a9cff; }
+        .tab-close { margin-left: 8px; opacity: 0.6; }
+        .tab-close:hover { opacity: 1; color: #ff6b6b; }
+        .editor-container { flex: 1; overflow: hidden; position: relative; }
+        #editor { height: 100%; width: 100%; }
+        .status-bar { background: #2d2d44; padding: 4px 16px; font-size: 12px; display: flex; gap: 20px; border-top: 1px solid #3a3a55; }
+        .btn { background: #4a4a7a; border: none; color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+        .btn-primary { background: #5a9cff; }
+        .btn-warning { background: #d99c2a; }
+        .btn-sm { padding: 2px 8px; font-size: 12px; }
+        textarea, input { background: #1e1e2f; border: 1px solid #4a4a6a; color: white; padding: 6px; border-radius: 4px; width: 100%; }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal { background: #2d2d44; padding: 24px; border-radius: 12px; min-width: 600px; max-width: 90%; max-height: 80vh; overflow-y: auto; }
+        .toast { position: fixed; bottom: 20px; right: 20px; background: #1e293b; padding: 10px 20px; border-radius: 40px; opacity: 0; transition: 0.2s; pointer-events: none; z-index: 1000; }
+    </style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+    // ---------- IMPORTS ----------
+    import { EditorView, basicSetup } from "codemirror";
+    import { python } from "@codemirror/lang-python";
+    import { javascript } from "@codemirror/lang-javascript";
+    import { html } from "@codemirror/lang-html";
+    import { css } from "@codemirror/lang-css";
+    import { json } from "@codemirror/lang-json";
+    import { yaml } from "@codemirror/lang-yaml";
+    import { markdown } from "@codemirror/lang-markdown";
+    import { oneDark } from "@codemirror/theme-one-dark";
+    import { autocompletion, closeBrackets } from "@codemirror/autocomplete";
+    import { search, searchKeymap } from "@codemirror/search";
+    import { indentWithTab } from "@codemirror/commands";
+    import { keymap } from "@codemirror/view";
+
+    // ---------- ESTADO GLOBAL ----------
+    const fileMap = new Map(); // ruta -> { content, language }
+    const openTabs = new Map(); // ruta -> { view, language }
+    let activeTabPath = null;
+
+    // Mapa de extensiones a lenguaje CodeMirror
+    const languageExtensions = {
+        py: python, js: javascript, ts: javascript, html: html, css: css,
+        json: json, yaml: yaml, yml: yaml, md: markdown
+    };
+    function getLangExtension(path) {
+        const ext = path.split('.').pop().toLowerCase();
+        const fn = languageExtensions[ext] || markdown;
+        return fn();
+    }
+
+    // Toast
+    function showToast(msg) {
+        let toast = document.getElementById('toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'toast';
+            toast.className = 'toast';
+            document.body.appendChild(toast);
+        }
+        toast.textContent = msg;
+        toast.style.opacity = '1';
+        setTimeout(() => toast.style.opacity = '0', 2000);
+    }
+
+    // ---------- RENDERIZADO DE UI ----------
+    function renderApp() {
+        document.getElementById('app').innerHTML = `
+            <div class="toolbar">
+                <button class="btn btn-primary" id="extractBtn">📥 Extraer código</button>
+                <button class="btn" id="openFolderBtn">📂 Abrir carpeta</button>
+                <button class="btn" id="saveSessionBtn">💾 Guardar sesión</button>
+                <button class="btn" id="loadSessionBtn">📂 Cargar sesión</button>
+                <input type="file" id="loadSessionInput" accept=".json" style="display:none;">
+                <button class="btn" id="downloadZipBtn">⬇️ Descargar ZIP</button>
+                <span style="flex:1;"></span>
+                <button class="btn btn-sm" id="newFileBtn">➕ Nuevo</button>
+            </div>
+            <div class="main-layout">
+                <div class="panel panel-left">
+                    <div class="panel-header">📁 EXPLORADOR</div>
+                    <div class="file-list" id="fileListContainer"></div>
+                </div>
+                <div class="panel-center">
+                    <div class="tab-bar" id="tabBar"></div>
+                    <div class="editor-container">
+                        <div id="editor"></div>
+                    </div>
+                    <div class="status-bar" id="statusBar">Listo</div>
+                </div>
+            </div>
+        `;
+        attachEvents();
+        renderFileList();
+        renderTabs();
+    }
+
+    function attachEvents() {
+        document.getElementById('extractBtn').onclick = showExtractModal;
+        document.getElementById('openFolderBtn').onclick = openFolder;
+        document.getElementById('saveSessionBtn').onclick = saveSession;
+        document.getElementById('loadSessionBtn').onclick = () => document.getElementById('loadSessionInput').click();
+        document.getElementById('loadSessionInput').onchange = loadSession;
+        document.getElementById('downloadZipBtn').onclick = downloadZip;
+        document.getElementById('newFileBtn').onclick = createNewFile;
+    }
+
+    // ---------- EXPLORADOR ----------
+    function renderFileList() {
+        const container = document.getElementById('fileListContainer');
+        if (fileMap.size === 0) {
+            container.innerHTML = '<div style="padding:16px;color:#888;">📭 Vacío</div>';
+            return;
+        }
+        let html = '';
+        const sorted = Array.from(fileMap.keys()).sort();
+        for (let path of sorted) {
+            html += `<div class="file-item" data-path="${path}">📄 ${path}</div>`;
+        }
+        container.innerHTML = html;
+        container.querySelectorAll('.file-item').forEach(el => {
+            el.addEventListener('dblclick', () => openFile(el.dataset.path));
+        });
+    }
+
+    // ---------- PESTAÑAS Y EDITOR ----------
+    function openFile(path) {
+        if (!fileMap.has(path)) return;
+        if (openTabs.has(path)) {
+            setActiveTab(path);
+            return;
+        }
+        const file = fileMap.get(path);
+        const langExt = getLangExtension(path);
+        const view = new EditorView({
+            doc: file.content,
+            extensions: [
+                basicSetup,
+                closeBrackets(),
+                langExt,
+                oneDark,
+                autocompletion(),
+                search(),
+                keymap.of([...searchKeymap, indentWithTab]),
+                EditorView.updateListener.of(update => {
+                    if (update.docChanged) {
+                        fileMap.set(path, { ...file, content: update.state.doc.toString() });
+                        updateStatus(path);
+                    }
+                })
+            ],
+            parent: document.getElementById('editor')
+        });
+        openTabs.set(path, { view, language: file.language });
+        setActiveTab(path);
+        renderTabs();
+    }
+
+    function setActiveTab(path) {
+        activeTabPath = path;
+        openTabs.forEach((tab, p) => {
+            tab.view.dom.style.display = p === path ? '' : 'none';
+        });
+        renderTabs();
+        updateStatus(path);
+    }
+
+    function closeTab(path) {
+        const tab = openTabs.get(path);
+        if (tab) {
+            tab.view.destroy();
+            openTabs.delete(path);
+        }
+        if (activeTabPath === path) {
+            const next = openTabs.keys().next().value;
+            if (next) setActiveTab(next);
+            else {
+                activeTabPath = null;
+                document.getElementById('editor').innerHTML = '';
+                document.getElementById('statusBar').innerText = 'Listo';
+            }
+        }
+        renderTabs();
+    }
+
+    function renderTabs() {
+        const bar = document.getElementById('tabBar');
+        let html = '';
+        for (let [path] of openTabs) {
+            html += `<div class="tab ${path === activeTabPath ? 'active' : ''}" data-path="${path}">
+                ${path.split('/').pop()} <span class="tab-close" data-path="${path}">✕</span>
+            </div>`;
+        }
+        bar.innerHTML = html;
+        bar.querySelectorAll('.tab').forEach(el => {
+            el.addEventListener('click', (e) => {
+                if (!e.target.classList.contains('tab-close')) setActiveTab(el.dataset.path);
+            });
+        });
+        bar.querySelectorAll('.tab-close').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeTab(el.dataset.path);
+            });
+        });
+    }
+
+    function updateStatus(path) {
+        const file = fileMap.get(path);
+        if (!file) return;
+        const lines = file.content.split('\n').length;
+        document.getElementById('statusBar').innerText = `${path} · ${lines} líneas · ${file.language || 'text'}`;
+    }
+
+    // ---------- EXTRACTOR ULTRARROBUSTO ----------
+    const KNOWN_LANGUAGES = new Set([
+        'python', 'py', 'javascript', 'js', 'typescript', 'ts', 'html', 'css',
+        'json', 'yaml', 'yml', 'text', 'txt', 'cpp', 'c', 'bash', 'sh', 'md'
+    ]);
+
+    function extractFilesFromText(text, overwrite = true) {
+        const lines = text.split('\n');
+        const extracted = [];
+        let i = 0;
+        
+        while (i < lines.length) {
+            const line = lines[i];
+            
+            // 1. Patrón con backticks ```lenguaje:ruta
+            if (line.startsWith('```')) {
+                const rest = line.substring(3).trim();
+                const colon = rest.indexOf(':');
+                let lang = '', path = '';
+                if (colon > -1) {
+                    lang = rest.substring(0, colon).trim();
+                    path = rest.substring(colon + 1).trim();
+                } else {
+                    lang = rest;
+                }
+                let j = i + 1;
+                const contentLines = [];
+                while (j < lines.length && !lines[j].startsWith('```')) {
+                    contentLines.push(lines[j]);
+                    j++;
+                }
+                const content = contentLines.join('\n').trim();
+                if (content && path) {
+                    extracted.push({ path, content, language: lang });
+                }
+                i = j + 1;
+                continue;
+            }
+            
+            // 2. Patrón lenguaje:ruta (ej: js:modules/rpg/config.js) seguido de contenido
+            const langPathMatch = line.match(/^([a-zA-Z0-9]+):([a-zA-Z0-9_\-\.\/]+\.([a-zA-Z0-9]+))\s*$/);
+            if (langPathMatch) {
+                const lang = langPathMatch[1].toLowerCase();
+                const path = langPathMatch[2];
+                // Solo procesamos si el lenguaje es conocido o si la extensión es conocida
+                if (KNOWN_LANGUAGES.has(lang) || KNOWN_LANGUAGES.has(path.split('.').pop().toLowerCase())) {
+                    let j = i + 1;
+                    // Saltar líneas vacías
+                    while (j < lines.length && lines[j].trim() === '') j++;
+                    const contentLines = [];
+                    // Capturar hasta el siguiente encabezado (```, lenguaje:ruta, ###, // Archivo:)
+                    while (j < lines.length) {
+                        const nextLine = lines[j];
+                        if (nextLine.startsWith('```') || 
+                            nextLine.match(/^([a-zA-Z0-9]+):([a-zA-Z0-9_\-\.\/]+\.\w+)/) ||
+                            nextLine.match(/^###/) ||
+                            nextLine.match(/^\/\/\s*Archivo:/i)) {
+                            break;
+                        }
+                        contentLines.push(nextLine);
+                        j++;
+                    }
+                    const content = contentLines.join('\n').trim();
+                    if (content) {
+                        extracted.push({ path, content, language: lang });
+                    }
+                    i = j;
+                    continue;
+                }
+            }
+            
+            // 3. Patrón ### ruta/archivo.ext
+            const commentMatch = line.match(/^###\s*(.+)$/i);
+            if (commentMatch) {
+                const path = commentMatch[1].trim();
+                let j = i + 1;
+                let lang = '';
+                if (j < lines.length && KNOWN_LANGUAGES.has(lines[j].trim().toLowerCase())) {
+                    lang = lines[j].trim().toLowerCase();
+                    j++;
+                }
+                const contentLines = [];
+                while (j < lines.length && !lines[j].startsWith('```') && !lines[j].match(/^###/) && !lines[j].match(/^\/\/\s*Archivo:/i)) {
+                    contentLines.push(lines[j]);
+                    j++;
+                }
+                const content = contentLines.join('\n').trim();
+                if (content) {
+                    extracted.push({ path, content, language: lang });
+                }
+                i = j;
+                continue;
+            }
+            
+            // 4. Patrón // Archivo: ruta/archivo.ext
+            const fileCommentMatch = line.match(/^\/\/\s*Archivo:\s*(.+)$/i);
+            if (fileCommentMatch) {
+                const path = fileCommentMatch[1].trim();
+                let j = i + 1;
+                let lang = '';
+                if (j < lines.length && KNOWN_LANGUAGES.has(lines[j].trim().toLowerCase())) {
+                    lang = lines[j].trim().toLowerCase();
+                    j++;
+                }
+                const contentLines = [];
+                while (j < lines.length && !lines[j].startsWith('```') && !lines[j].match(/^###/) && !lines[j].match(/^\/\/\s*Archivo:/i)) {
+                    contentLines.push(lines[j]);
+                    j++;
+                }
+                const content = contentLines.join('\n').trim();
+                if (content) {
+                    extracted.push({ path, content, language: lang });
+                }
+                i = j;
+                continue;
+            }
+            
+            i++;
+        }
+        
+        let added = 0;
+        for (let f of extracted) {
+            if (!overwrite && fileMap.has(f.path)) continue;
+            fileMap.set(f.path, { content: f.content, language: f.language || f.path.split('.').pop() });
+            added++;
+        }
+        
+        renderFileList();
+        showToast(`✅ ${added} archivos extraídos`);
+        return added;
+    }
+
+    // ---------- MODAL DE EXTRACCIÓN ----------
+    function showExtractModal() {
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal">
+                <h3 style="margin-top:0;">📥 Extraer archivos (formato flexible)</h3>
+                <textarea id="extractInput" rows="12" placeholder="Pega el texto con bloques de código..."></textarea>
+                <div style="margin:12px 0;">
+                    <label><input type="checkbox" id="overwriteCheck" checked> Sobrescribir existentes</label>
+                </div>
+                <div style="display:flex; gap:12px; justify-content:flex-end;">
+                    <button class="btn" id="cancelExtractBtn">Cancelar</button>
+                    <button class="btn btn-primary" id="processExtractBtn">Extraer</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        modal.querySelector('#cancelExtractBtn').onclick = () => modal.remove();
+        modal.querySelector('#processExtractBtn').onclick = () => {
+            const text = modal.querySelector('#extractInput').value;
+            const overwrite = modal.querySelector('#overwriteCheck').checked;
+            extractFilesFromText(text, overwrite);
+            modal.remove();
+        };
+    }
+
+    // ---------- CARGA DE CARPETAS ----------
+    async function openFolder() {
+        if ('showDirectoryPicker' in window) {
+            try {
+                const dirHandle = await window.showDirectoryPicker();
+                await readDirectoryRecursively(dirHandle, '');
+                renderFileList();
+                showToast('📁 Proyecto cargado desde disco.');
+            } catch (err) {
+                if (err.name !== 'AbortError') showToast('Error: ' + err.message);
+            }
+        } else {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.webkitdirectory = true;
+            input.multiple = true;
+            input.onchange = async (e) => {
+                const files = Array.from(e.target.files);
+                let added = 0;
+                for (const file of files) {
+                    const path = file.webkitRelativePath;
+                    if (!path) continue;
+                    const ext = path.split('.').pop().toLowerCase();
+                    const supported = ['py','js','html','css','json','yaml','yml','txt','md','cpp','c','java','sh'];
+                    if (!supported.includes(ext)) continue;
+                    const content = await file.text();
+                    fileMap.set(path, { content, language: ext });
+                    added++;
+                }
+                if (added) { renderFileList(); showToast(`📁 ${added} archivos cargados`); }
+                else showToast('No se encontraron archivos soportados');
+            };
+            input.click();
+        }
+    }
+
+    async function readDirectoryRecursively(dirHandle, currentPath) {
+        for await (const entry of dirHandle.values()) {
+            const entryPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+            if (entry.kind === 'file') {
+                const ext = entry.name.split('.').pop().toLowerCase();
+                const supported = ['py','js','html','css','json','yaml','yml','txt','md','cpp','c','java','sh'];
+                if (!supported.includes(ext)) continue;
+                const file = await entry.getFile();
+                const content = await file.text();
+                fileMap.set(entryPath, { content, language: ext });
+            } else if (entry.kind === 'directory') {
+                await readDirectoryRecursively(entry, entryPath);
+            }
+        }
+    }
+
+    // ---------- GESTIÓN DE SESIONES Y ZIP ----------
+    function saveSession() {
+        const data = {};
+        for (let [path, file] of fileMap) data[path] = file;
+        const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `sesion_${new Date().toISOString().slice(0,10)}.json`;
+        a.click();
+        showToast('💾 Sesión guardada');
+    }
+
+    function loadSession(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const data = JSON.parse(ev.target.result);
+                for (let [path, obj] of Object.entries(data)) {
+                    if (obj.content) fileMap.set(path, { content: obj.content, language: obj.language || '' });
+                }
+                renderFileList();
+                showToast(`📂 ${Object.keys(data).length} archivos cargados`);
+            } catch(ex) { showToast('JSON inválido'); }
+            e.target.value = '';
+        };
+        reader.readAsText(file);
+    }
+
+    async function downloadZip() {
+        if (fileMap.size === 0) { showToast('No hay archivos'); return; }
+        const zip = new JSZip();
+        for (let [path, file] of fileMap) zip.file(path, file.content);
+        const blob = await zip.generateAsync({type: 'blob'});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `proyecto_${new Date().toISOString().slice(0,10)}.zip`;
+        a.click();
+        showToast('📦 ZIP descargado');
+    }
+
+    function createNewFile() {
+        const name = prompt('Nombre del nuevo archivo (ej: test.py):');
+        if (!name) return;
+        fileMap.set(name, { content: '', language: name.split('.').pop() });
+        renderFileList();
+        openFile(name);
+        showToast(`➕ ${name} creado`);
+    }
+
+    // ---------- INICIALIZAR ----------
+    window.onload = () => {
+        renderApp();
+        // Archivos de ejemplo
+        if (fileMap.size === 0) {
+            fileMap.set('demo.js', { content: '// Ejemplo JavaScript\nconsole.log("Hola");', language: 'javascript' });
+            fileMap.set('demo.py', { content: '# Ejemplo Python\nprint("Hola")', language: 'python' });
+        }
+        renderFileList();
+    };
+</script>
+</body>
+</html>
