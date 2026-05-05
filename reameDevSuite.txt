@@ -1,0 +1,156 @@
+ Documentación de DevSuite Fusion
+1. ¿Qué es?
+DevSuite Fusion es una herramienta web autocontenida (un solo archivo .html) que fusiona:
+
+Un editor de código con resaltado de sintaxis (CodeMirror 6).
+
+Un gestor de proyectos en memoria con árbol de archivos.
+
+Capacidad de exportar/importar archivos entre el chat de una IA y el editor.
+
+Integración con API de IA (DeepSeek, OpenAI, Ollama local) para explicar código o generar YAML estructural.
+
+Persistencia local mediante sesiones JSON y vinculación con el sistema de archivos (File System Access API).
+
+Está pensado para desarrolladores que usan asistentes de IA y quieren pasar fácilmente del chat al código organizado, con análisis automático.
+
+2. 🚀 Características principales
+Funcionalidad	Descripción
+Editor multi‑lenguaje	Python, JavaScript, HTML, CSS, JSON, YAML con CodeMirror 6.
+Árbol de proyecto virtual	Visualización jerárquica de archivos, con colores para modificados/nuevos.
+Extracción inteligente	Pega una respuesta de chat y extrae automáticamente los archivos contenidos en bloques ```. |
+Exportación para chat	Copia todo el proyecto en un texto formateado listo para pegar en DeepSeek, ChatGPT, etc.
+Integración con IA	Botón para explicar el archivo actual y otro para generar un YAML de estructura (funciones/parámetros). Funciona con API en la nube o con Ollama local.
+Sesiones y ZIP	Guarda/carga sesiones completas (JSON) o descarga el proyecto como ZIP.
+Vinculación con carpetas reales	Abre una carpeta del disco, edita y guarda cambios directamente (Chrome/Edge).
+Panel lateral	Muestra conflictos al importar y aloja la consola de IA.
+3. 🧱 Arquitectura interna
+Todo el código vive en un <script type="module">. El estado se centraliza en el objeto global App:
+
+javascript
+App = {
+  fileMap,          // Map<ruta, { content, language, dirty, added }>
+  activeFilePath,   // archivo abierto en el editor
+  editorView,       // instancia de CodeMirror
+  rootDirHandle,    // manejador de la carpeta abierta (File System API)
+  fileHandleMap,    // Map<ruta, FileSystemFileHandle>
+  aiConfig,         // apiKey, apiUrl, model, isLocal
+  lastYaml          // último YAML generado
+}
+Componentes visuales
+Toolbar: botones principales (carpeta, guardar, sesión, ZIP, exportar, vaciar, Pyodide).
+
+Tree: #treeContainer muestra la estructura usando <details> anidados. Cada archivo tiene un data-path para abrirlo al hacer clic.
+
+Editor: #editorContainer se reemplaza cada vez que se abre un archivo, usando las extensiones de lenguaje adecuadas.
+
+Batch/Fragment: panel inferior que permite pegar texto para extraer archivos (pestaña “Extraer lote”) o insertar fragmentos (futuro).
+
+Panel derecho: pestañas “Conflictos” y “IA Explicación”. La pestaña IA tiene controles para clave API, modelo, y botones de análisis.
+
+Flujo de datos
+El usuario abre una carpeta (File System API) → se lee recursivamente y se llena App.fileMap.
+
+O bien, pega una respuesta del chat → extractFilesFromText() analiza el texto y añade archivos a App.fileMap.
+
+Al hacer clic en un archivo, se crea un nuevo EditorView con el contenido y se actualiza activeFilePath.
+
+Los cambios en el editor marcan el archivo como dirty.
+
+Guardar (Ctrl+S) escribe en disco usando el FileHandle almacenado.
+
+La IA se invoca mediante callAI() que envía el prompt a la URL configurada y devuelve la respuesta.
+
+4. 📋 Cómo usar
+4.1. Requisitos
+Navegador moderno (Chrome, Edge, Opera). Firefox no soporta showDirectoryPicker.
+
+Para la IA en la nube: una API Key de DeepSeek (https://platform.deepseek.com/).
+
+Para IA local: Ollama corriendo con un modelo (ej. ollama pull deepseek-coder-v2:16b).
+
+4.2. Primeros pasos
+Abre el archivo devsuite.html en el navegador.
+
+Abrir proyecto existente: clic en 📂 Carpeta y selecciona la raíz de tu proyecto.
+
+Navegar: haz clic en los archivos del árbol para editarlos.
+
+Guardar: pulsa 💾 Guardar o Ctrl+S.
+
+Exportar para chat: clic en 📋 Exportar chat. Copia el texto y pégalo en tu asistente.
+
+Importar desde chat: en el otro lado, cuando la IA te devuelva código con bloques, pégalo en el área de texto de “Extraer lote” y pulsa 🔍 Extraer archivos.
+
+Usar IA local: en el panel derecho → pestaña 🧠 IA Explicación → clic en 🖥️ Usar Ollama local, luego 🔍 Explicar archivo actual.
+
+4.3. Workflow típico
+Empiezas un proyecto: abres carpeta, editas, guardas.
+
+Consultas a la IA: exportas el estado actual, pegas en el chat, pides cambios.
+
+Recibes cambios: copias la respuesta, vuelves a DevSuite, pegas en “Extraer lote” y los archivos aparecen (con posibles conflictos gestionados).
+
+Revisas con IA: seleccionas un archivo, pides “Explicar” o “Generar YAML” para entenderlo mejor.
+
+Guardas sesión para continuar después.
+
+5. 🛠️ Utilidades prácticas
+Refactorización asistida por IA: extraes el código, pides mejoras a la IA, y reinyectas la respuesta.
+
+Documentación automática: generas un YAML con la estructura de cada archivo y los guardas como .yml en el proyecto.
+
+Revisión de código sin conexión: usando Ollama, analizas el código sin enviar datos a internet.
+
+Migraciones o renombres: extraes todo, pides a la IA que renombre funciones en todos los archivos, y reimportas (con precaución).
+
+Característica de “doble ciego”: puedes explicar primero, luego generar YAML, e incluso con un script adicional hacer revisión automática (no incluido en esta versión).
+
+6. ⚠️ Fallos y limitaciones conocidas
+6.1. Compatibilidad
+Solo funciona en navegadores que soporten File System Access API (Chrome, Edge). Sin esto no podrás guardar en disco ni abrir carpetas; el resto de funciones (editor, IA) sí funcionan.
+
+La API de acceso a archivos requiere contexto seguro (HTTPS o localhost). Si abres el archivo directamente desde el sistema de archivos (file://), la API de carpetas lanzará error; puedes usar un servidor local (p.ej. npx serve).
+
+6.2. Rendimiento
+Proyectos muy grandes (>500 archivos) pueden ralentizar la interfaz porque todo se guarda en memoria y se renderiza el árbol completo.
+
+La extracción de texto muy largo (>1 MB) puede congelar la pestaña momentáneamente; se recomienda dividir en partes.
+
+El editor de CodeMirror carga los archivos completos; archivos de >1 MB pueden hacer que el editor vaya lento.
+
+6.3. IA y prompts
+El prompt para YAML puede fallar si el modelo es pequeño (los modelos locales de 7B a veces no siguen el formato exacto).
+
+La función extractFilesFromText asume ciertas marcas (// Archivo:, ###, @file) y triple backtick con ruta. Si la IA responde en un formato distinto, no extraerá correctamente.
+
+No hay control de tasa de llamadas a la API (rate limiting). Si usas la nube muy seguido podrías recibir errores 429.
+
+6.4. Seguridad
+La clave API se almacena en localStorage sin cifrar. No uses la herramienta en ordenadores públicos o compartidos.
+
+Al usar Ollama local, las peticiones van a http://localhost:11434. Si tienes un proxy mal configurado, podrías exponer el servicio.
+
+6.5. Conflictos
+Si importas un archivo que ya existe, se ofrece sobrescribir, mantener el original o crear una copia. Pero no hay fusión inteligente de diferencias (tipo Git merge). El nuevo contenido reemplaza totalmente al anterior.
+
+6.6. Pyodide (análisis AST)
+Pyodide carga bajo demanda; mientras no se pulse “Cargar Pyodide”, el análisis Python no estará activo. Incluso cargado, solo devuelve nombres de funciones con la función de ejemplo. Se puede extender fácilmente.
+
+7. 🧩 Posibles mejoras futuras
+Resaltado de diferencias en conflictos (antes/después).
+
+Agente automático: que ante un comentario en un issue haga un commit (GitHub Actions).
+
+Soporte para más lenguajes en el editor (TypeScript, Rust, Go).
+
+Integración con Git (status, diff) directamente desde el navegador (usando isomorphic-git o similar).
+
+Modo sin conexión total con modelos locales y almacenamiento en IndexedDB.
+
+Botón “Revisar con segunda IA” (doble ciego) usando el mismo flujo.
+
+8. 💬 Resumen
+DevSuite Fusion es una navaja suiza para el desarrollador que trabaja con asistentes de IA. Convierte el ida y vuelta del chat en un flujo de trabajo cómodo, manteniendo el control manual y permitiendo análisis automáticos. Es ligero, portable y extensible.
+
+Si quieres añadir alguna funcionalidad concreta o necesitas aclarar algún punto del código, avísame y lo mejoramos juntos.
