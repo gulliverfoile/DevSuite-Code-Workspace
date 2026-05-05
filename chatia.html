@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevSuite Fusion · Flujos de eventos</title>
+    <!-- CodeMirror 6 -->
+    <link rel="stylesheet" href="https://esm.sh/codemirror@6.0.1/lib/codemirror.css">
+    <link rel="stylesheet" href="https://esm.sh/@codemirror/theme-one-dark@6.1.2/lib/one-dark.css">
+    <!-- JSZip, js-yaml, Acorn, ESQuery -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+    <script src="https://unpkg.com/acorn@8.8.0/dist/acorn.js"></script>
+    <script src="https://unpkg.com/esquery@1.4.0/dist/esquery.min.js"></script>
+    <!-- Pyodide (carga bajo demanda) -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js"></script>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --border: #334155;
+            --accent: #3b82f6;
+        }
+        * { box-sizing: border-box; font-family: 'Segoe UI', system-ui, sans-serif; }
+        body { background: var(--bg); color: #e2e8f0; margin: 0; padding: 20px; }
+        .app-container { max-width: 1800px; margin: 0 auto; }
+        .toolbar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; align-items: center; }
+        .btn { background: var(--accent); border: none; padding: 8px 18px; border-radius: 40px; font-weight: 600; cursor: pointer; color: white; display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s; }
+        .btn:hover { filter: brightness(1.1); }
+        .btn-secondary { background: #334155; }
+        .btn-warning { background: #f59e0b; }
+        .btn-outline { background: transparent; border: 1px solid #475569; color: #cbd5e1; }
+        .btn-success { background: #10b981; }
+        .btn-danger { background: #ef4444; }
+        .tab-bar { display: flex; gap: 4px; background: #1e293b; padding: 4px; border-radius: 60px; margin-bottom: 24px; }
+        .tab { padding: 8px 24px; border-radius: 40px; background: transparent; color: #94a3b8; font-weight: 600; cursor: pointer; border: none; }
+        .tab.active { background: var(--accent); color: white; }
+        .main-grid { display: grid; grid-template-columns: 280px 1fr 250px; gap: 16px; }
+        .card { background: var(--card); border-radius: 24px; padding: 16px; border: 1px solid var(--border); overflow: hidden; }
+        .tree-container { max-height: 600px; overflow-y: auto; font-size: 13px; }
+        .tree-item { padding: 4px 8px; cursor: pointer; border-radius: 8px; display: flex; align-items: center; gap: 6px; user-select: none; }
+        .tree-item:hover { background: #334155; }
+        .tree-item.active { background: var(--accent); }
+        .tree-item.new { background: #065f46; animation: fadeGreen 2s forwards; }
+        .tree-item.modified { background: #92400e; }
+        @keyframes fadeGreen { to { background: transparent; } }
+        .editor-container { height: 550px; border-radius: 16px; overflow: hidden; border: 1px solid var(--border); }
+        .file-list { max-height: 500px; overflow-y: auto; }
+        .toast { position: fixed; bottom: 20px; right: 20px; background: var(--card); padding: 10px 20px; border-radius: 40px; opacity: 0; transition: 0.2s; pointer-events: none; z-index: 1000; }
+        .toast.show { opacity: 1; }
+        textarea, input[type="text"], input[type="password"] {
+            background: #0f172a; border: 1px solid var(--border); color: white; border-radius: 20px; padding: 12px; width: 100%;
+        }
+        .flex { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+        hr { border-color: var(--border); }
+        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 2000; }
+        .modal-box { background: var(--card); border-radius: 24px; padding: 24px; max-width: 90vw; width: 700px; max-height: 80vh; overflow-y: auto; border: 1px solid #475569; }
+        .conflict-item { background: #0f172a; border-radius: 12px; padding: 12px; margin: 8px 0; }
+        .badge { background: var(--accent); border-radius: 20px; padding: 2px 10px; font-size: 11px; }
+        .badge-warn { background: #f59e0b; }
+        .path-normalized { font-size: 10px; color: #64748b; margin-left: 8px; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .ai-output { white-space: pre-wrap; font-size: 12px; max-height: 400px; overflow-y: auto; }
+        .flow-tree summary { cursor: pointer; }
+        .flow-dest { font-weight: 600; margin: 4px 0; }
+        .fan-low { color: #10b981; }   /* 1-2 orígenes */
+        .fan-mid { color: #f59e0b; }   /* 3-4 orígenes */
+        .fan-high { color: #ef4444; }  /* 5+ orígenes */
+        .flow-origin { margin-left: 20px; font-size: 12px; }
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <div class="toolbar">
+        <h2 style="margin:0;">⚡ DevSuite Fusion</h2>
+        <button class="btn btn-secondary" id="openFolderBtn">📂 Carpeta</button>
+        <button class="btn btn-success" id="saveCurrentFileBtn" disabled>💾 Guardar (Ctrl+S)</button>
+        <button class="btn btn-secondary" id="saveSessionBtn">📦 Sesión</button>
+        <button class="btn btn-secondary" id="loadSessionBtn">📂 Cargar</button>
+        <input type="file" id="loadSessionInput" accept=".json" style="display:none;">
+        <button class="btn btn-secondary" id="downloadZipBtn">⬇️ ZIP</button>
+        <button class="btn btn-primary" id="exportChatBtn">📋 Exportar chat</button>
+        <button class="btn btn-outline" id="clearAllBtn">🧹 Vaciar</button>
+        <span id="pyodideStatus" class="badge">🐍 Python AST: No cargado</span>
+        <button class="btn btn-success" id="loadPyodideBtn">🐍 Cargar Pyodide</button>
+    </div>
+
+    <div id="metricsBar" style="margin-bottom: 12px; font-size: 12px; color: #94a3b8;">
+        📊 <span id="metricFiles">0 archivos</span> · <span id="metricFolders">0 carpetas</span> · <span id="metricLines">0 líneas</span> · <span id="metricSize">0 KB</span>
+    </div>
+
+    <div class="main-grid">
+        <!-- Árbol de proyecto -->
+        <div class="card">
+            <h3>🗂️ Proyecto</h3>
+            <div class="tree-container" id="treeContainer"></div>
+            <button class="btn btn-secondary" style="margin-top: 8px; width: 100%;" id="collapseTreeBtn">📁 Colapsar todo</button>
+        </div>
+
+        <!-- Editor + extracción -->
+        <div class="card">
+            <div class="tab-bar" style="margin-bottom: 16px;">
+                <button class="tab active" id="subBatch">📥 Extraer lote</button>
+                <button class="tab" id="subFragment">🧩 Insertar fragmento</button>
+            </div>
+            <div id="batchArea">
+                <textarea id="batchText" rows="6" placeholder="Pega la respuesta del chat (con bloques de código)"></textarea>
+                <div class="flex" style="margin: 8px 0;">
+                    <label><input type="checkbox" id="overwriteBatch" checked> Sobrescribir existentes</label>
+                    <label><input type="checkbox" id="createDirsCheck"> Crear carpetas automáticamente</label>
+                </div>
+                <button class="btn" id="processBatchBtn">🔍 Extraer archivos</button>
+            </div>
+            <div id="fragmentArea" style="display:none;">
+                <textarea id="fragmentCode" rows="4" placeholder="Código a insertar"></textarea>
+                <input type="text" id="instructionInput" placeholder="// INSERTAR en utils.py despues de linea 5">
+                <div class="flex" style="margin: 8px 0;">
+                    <button class="btn" id="previewInstructionBtn">👁️ Vista previa</button>
+                    <button class="btn btn-secondary" id="manualInsertBtn">📄 Archivo nuevo</button>
+                </div>
+            </div>
+            <hr>
+            <div id="editorContainer" class="editor-container"></div>
+            <div id="statusBar" style="font-size:12px; margin-top:8px;">📄 Listo</div>
+        </div>
+
+        <!-- Panel lateral derecho (Conflictos, IA, Flujos) -->
+        <div class="card">
+            <div class="tab-bar" style="margin-bottom: 12px;">
+                <button class="tab active" id="tabConflicts">⚠️ Conflictos</button>
+                <button class="tab" id="tabAI">🧠 IA Explicación</button>
+                <button class="tab" id="tabFlows">📊 Flujos</button>
+            </div>
+            <div id="panelConflicts" class="tab-content active" style="font-size:12px; max-height: 400px; overflow-y: auto;">
+                Sin conflictos
+            </div>
+            <div id="panelAI" class="tab-content" style="font-size:12px;">
+                <div style="margin-bottom: 12px;">
+                    <label>Clave API (DeepSeek) ⓘ <small>se guarda local</small></label>
+                    <input type="password" id="apiKeyInput" placeholder="sk-..." style="margin-top:4px;">
+                    <div class="flex" style="margin-top:4px;">
+                        <button class="btn btn-secondary" id="saveApiKeyBtn">💾 Guardar clave</button>
+                        <button class="btn btn-outline" id="useLocalBtn">🖥️ Usar Ollama local</button>
+                    </div>
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <label>Modelo:</label>
+                    <input type="text" id="modelInput" value="deepseek-chat">
+                </div>
+                <button class="btn btn-warning" id="explainFileBtn">🔍 Explicar archivo actual</button>
+                <button class="btn btn-secondary" id="generateYamlBtn">📋 Generar YAML de estructura</button>
+                <button class="btn btn-secondary" id="saveYamlBtn" style="margin-top:4px;">💾 Guardar YAML en proyecto</button>
+                <div id="aiOutput" class="ai-output" style="margin-top:12px; background:#0f172a; border-radius:12px; padding:12px;">
+                    <em>Pulsa alguno de los botones para analizar el código.</em>
+                </div>
+            </div>
+            <div id="panelFlows" class="tab-content" style="font-size:12px; max-height: 400px; overflow-y: auto;">
+                <div id="flowTreeContainer" class="flow-tree">
+                    <em>Aquí se mostrará el árbol de eventos.</em>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="toast" class="toast"></div>
+
+<script type="module">
+    // ============================================================
+    // MÓDULO: Configuración y ayuda global
+    // ============================================================
+    import { EditorView, basicSetup } from "https://esm.sh/codemirror@6.0.1";
+    import { python } from "https://esm.sh/@codemirror/lang-python@6.1.6";
+    import { javascript } from "https://esm.sh/@codemirror/lang-javascript@6.2.2";
+    import { html } from "https://esm.sh/@codemirror/lang-html@6.4.9";
+    import { css } from "https://esm.sh/@codemirror/lang-css@6.2.1";
+    import { json } from "https://esm.sh/@codemirror/lang-json@6.0.1";
+    import { yaml } from "https://esm.sh/@codemirror/lang-yaml@6.1.1";
+    import { oneDark } from "https://esm.sh/@codemirror/theme-one-dark@6.1.2";
+    import { autocompletion } from "https://esm.sh/@codemirror/autocomplete@6.16.0";
+    import { search, searchKeymap } from "https://esm.sh/@codemirror/search@6.5.6";
+    import { keymap, indentWithTab } from "https://esm.sh/@codemirror/commands@6.5.0";
+
+    // ---------- ESTADO GLOBAL ----------
+    window.App = {
+        fileMap: new Map(),
+        activeFilePath: null,
+        editorView: null,
+        rootDirHandle: null,
+        fileHandleMap: new Map(),
+        pyodideReady: false,
+        pyodide: null,
+        recentConflicts: [],
+        aiConfig: {
+            apiKey: localStorage.getItem('ds_api_key') || '',
+            apiUrl: 'https://api.deepseek.com/v1/chat/completions',
+            model: 'deepseek-chat',
+            isLocal: false
+        },
+        lastYaml: '',
+        eventLog: []         // NUEVO: registro de eventos
+    };
+
+    // ---------- HELPERS ----------
+    function showToast(msg, duration = 2500) {
+        const toast = document.getElementById('toast');
+        toast.textContent = msg;
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), duration);
+    }
+
+    function normalizePath(rawPath) {
+        return rawPath.trim().replace(/\\/g, '/').toLowerCase();
+    }
+
+    function updateMetrics() {
+        const paths = Array.from(App.fileMap.keys());
+        const totalFiles = paths.length;
+        const folders = new Set();
+        let totalLines = 0, totalSize = 0;
+        for (const [path, file] of App.fileMap.entries()) {
+            const dir = path.includes('/') ? path.split('/').slice(0, -1).join('/') : '';
+            if (dir) folders.add(dir);
+            totalLines += (file.content.match(/\n/g) || []).length + 1;
+            totalSize += new Blob([file.content]).size;
+        }
+        document.getElementById('metricFiles').textContent = `${totalFiles} archivos`;
+        document.getElementById('metricFolders').textContent = `${folders.size} carpetas`;
+        document.getElementById('metricLines').textContent = `${totalLines} líneas`;
+        document.getElementById('metricSize').textContent = `${(totalSize / 1024).toFixed(1)} KB`;
+    }
+
+    // ---------- REGISTRO DE EVENTOS ----------
+    function logEvent(origin, target) {
+        App.eventLog.push({
+            origin: origin,
+            target: target,
+            timestamp: Date.now()
+        });
+        // Opcional: actualizar el árbol de flujo si está visible
+        const panelFlows = document.getElementById('panelFlows');
+        if (panelFlows && panelFlows.classList.contains('active')) {
+            renderFlowTree();
+        }
+    }
+
+    // ---------- ÁRBOL DE PROYECTO ----------
+    function buildFileTree() {
+        const tree = {};
+        for (const path of App.fileMap.keys()) {
+            const parts = path.split('/');
+            let current = tree;
+            for (let i = 0; i < parts.length; i++) {
+                const part = parts[i];
+                if (i === parts.length - 1) {
+                    current[part] = { type: 'file', path };
+                } else {
+                    if (!current[part]) current[part] = { type: 'dir', children: {} };
+                    current = current[part].children;
+                }
+            }
+        }
+        return tree;
+    }
+
+    function renderTree() {
+        const container = document.getElementById('treeContainer');
+        const tree = buildFileTree();
+        function renderNode(node, name, depth = 0) {
+            if (node.type === 'file') {
+                const fileData = App.fileMap.get(node.path);
+                const isNew = fileData?.added && (Date.now() - fileData.added < 5000);
+                const isActive = node.path === App.activeFilePath;
+                const cls = `tree-item ${isActive ? 'active' : ''} ${isNew ? 'new' : ''} ${fileData?.dirty ? 'modified' : ''}`;
+                return `<div class="${cls}" data-path="${node.path}" style="padding-left:${depth * 16 + 8}px;">📄 ${name}</div>`;
+            } else {
+                let html = `<details ${depth < 2 ? 'open' : ''}><summary class="tree-item" style="padding-left:${depth * 16 + 8}px;">📁 ${name}</summary>`;
+                for (const [childName, childNode] of Object.entries(node.children).sort()) {
+                    html += renderNode(childNode, childName, depth + 1);
+                }
+                html += '</details>';
+                return html;
+            }
+        }
+        let html = '';
+        for (const [name, node] of Object.entries(tree).sort()) {
+            html += renderNode(node, name);
+        }
+        if (!html) html = '<div style="padding:12px; color:#64748b;">Vacío</div>';
+        container.innerHTML = html;
+
+        container.querySelectorAll('.tree-item[data-path]').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const path = el.dataset.path;
+                if (App.fileMap.has(path)) {
+                    logEvent('clic en árbol', 'openFile');
+                    openFile(path);
+                }
+            });
+        });
+    }
+
+    // ---------- EDITOR CODE MIRROR ----------
+    function openFile(path) {
+        if (!App.fileMap.has(path)) return;
+        App.activeFilePath = path;
+        const file = App.fileMap.get(path);
+        const ext = path.split('.').pop().toLowerCase();
+        let langExt = null;
+        if (ext === 'py') langExt = python();
+        else if (ext === 'js') langExt = javascript();
+        else if (ext === 'html') langExt = html();
+        else if (ext === 'css') langExt = css();
+        else if (ext === 'json') langExt = json();
+        else if (ext === 'yaml' || ext === 'yml') langExt = yaml();
+        const extensions = [basicSetup, oneDark, autocompletion(), search(), keymap.of([...searchKeymap, indentWithTab])];
+        if (langExt) extensions.push(langExt);
+
+        if (App.editorView) App.editorView.destroy();
+        document.getElementById('editorContainer').innerHTML = '';
+        App.editorView = new EditorView({
+            doc: file.content,
+            extensions: [
+                ...extensions,
+                EditorView.updateListener.of(update => {
+                    if (update.docChanged) {
+                        const newContent = update.state.doc.toString();
+                        const oldFile = App.fileMap.get(path);
+                        App.fileMap.set(path, { ...oldFile, content: newContent, dirty: true });
+                        updateStatus(path);
+                    }
+                })
+            ],
+            parent: document.getElementById('editorContainer')
+        });
+        updateStatus(path);
+        renderTree();
+    }
+
+    function updateStatus(path) {
+        const file = App.fileMap.get(path);
+        if (file) {
+            const dirty = file.dirty ? ' ✏️ Modificado' : '';
+            document.getElementById('statusBar').innerHTML = `📄 ${path} · ${file.content.split('\n').length} líneas${dirty}`;
+        }
+        const saveBtn = document.getElementById('saveCurrentFileBtn');
+        saveBtn.disabled = !(App.activeFilePath && App.fileHandleMap.has(App.activeFilePath));
+    }
+
+    // ---------- EXPORTACIÓN A CHAT ----------
+    async function exportToChat() {
+        if (App.fileMap.size === 0) { showToast('No hay archivos'); return; }
+        let output = '🌳 Estructura del proyecto:\n';
+        const tree = buildFileTree();
+        function printTree(node, prefix = '') {
+            for (const [name, child] of Object.entries(node).sort()) {
+                if (child.type === 'dir') {
+                    output += `${prefix}📁 ${name}/\n`;
+                    printTree(child.children, prefix + '  ');
+                } else {
+                    output += `${prefix}📄 ${name}\n`;
+                }
+            }
+        }
+        printTree(tree);
+        output += '\n';
+
+        for (const [path, file] of App.fileMap) {
+            const lang = file.language || path.split('.').pop() || 'txt';
+            output += `\`\`\`${lang}:${path}\n${file.content}\n\`\`\`\n\n`;
+        }
+
+        const totalSize = new Blob([output]).size;
+        const totalMB = totalSize / (1024 * 1024);
+        if (totalMB > 1.0) {
+            showToast(`⚠️ Texto grande (${totalMB.toFixed(1)} MB). Descargando como archivo.`);
+            downloadTextAsFile(output, 'proyecto_para_chat.txt');
+            return;
+        }
+
+        let success = false;
+        try {
+            await navigator.clipboard.writeText(output);
+            success = true;
+        } catch (e) { /* fallback */ }
+        if (!success) success = copyViaTextarea(output);
+
+        if (success) showToast(`📋 ${App.fileMap.size} archivos copiados (${(totalSize/1024).toFixed(1)} KB)`);
+        else {
+            showToast('❌ Copia fallida, descargando archivo.');
+            downloadTextAsFile(output, 'proyecto_para_chat.txt');
+        }
+        logEvent('Exportar chat', 'exportToChat');
+    }
+
+    function copyViaTextarea(text) {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand('copy');
+            return true;
+        } catch (e) { return false; }
+        finally { document.body.removeChild(textarea); }
+    }
+
+    function downloadTextAsFile(text, filename) {
+        const blob = new Blob([text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    // ---------- EXTRACCIÓN DE ARCHIVOS ----------
+    function extractFilesFromText(text, overwrite, createDirs) {
+        logEvent('Extraer archivos', 'extractFilesFromText');
+        const normalized = text.replace(/\r\n/g, '\n');
+        const blockRegex = /```(\w+)?(?::(\S+))?\n([\s\S]*?)```/g;
+        const extracted = [];
+        let match;
+        while ((match = blockRegex.exec(normalized)) !== null) {
+            let lang = match[1] || '';
+            let path = match[2] || '';
+            const code = match[3].trim();
+            if (!path) {
+                const before = normalized.substring(0, match.index).split('\n');
+                const prevLine = before[before.length - 2] || '';
+                const fileMarker = prevLine.match(/(?:\/\/\s*Archivo:\s*|###\s*|@file\s*)(\S+)/i);
+                if (fileMarker) path = fileMarker[1].trim();
+            }
+            if (path && code) extracted.push({ path, content: code, language: lang });
+        }
+
+        const markerRegex = /(?:^|\n)(?:\/\/\s*Archivo:\s*|###\s*|@file\s*)(\S+)\s*\n([\s\S]*?)(?=\n(?:\/\/\s*Archivo:|###\s|@file\s)|\n```|$)/gi;
+        while ((match = markerRegex.exec(normalized)) !== null) {
+            const path = match[1].trim();
+            const code = match[2].trim();
+            if (code && !extracted.some(e => normalizePath(e.path) === normalizePath(path))) {
+                extracted.push({ path, content: code, language: '' });
+            }
+        }
+
+        let added = 0, conflicts = 0;
+        const addedPaths = [];
+        for (const item of extracted) {
+            const normalizedPath = normalizePath(item.path);
+            const existingPath = Array.from(App.fileMap.keys()).find(p => normalizePath(p) === normalizedPath);
+            if (existingPath) {
+                conflicts++;
+                if (overwrite) {
+                    App.fileMap.set(existingPath, { ...App.fileMap.get(existingPath), content: item.content, dirty: false, added: Date.now() });
+                    addedPaths.push(existingPath);
+                } else if (confirm(`El archivo "${existingPath}" ya existe. ¿Sobrescribir?\n(Aceptar = sobrescribir, Cancelar = mantener actual)`)) {
+                    App.fileMap.set(existingPath, { ...App.fileMap.get(existingPath), content: item.content, dirty: false, added: Date.now() });
+                    addedPaths.push(existingPath);
+                } else {
+                    const ext = existingPath.split('.').pop();
+                    const base = existingPath.substring(0, existingPath.lastIndexOf('.'));
+                    let copyPath = `${base}.copy.${ext}`;
+                    let counter = 1;
+                    while (App.fileMap.has(copyPath)) copyPath = `${base}.copy${counter++}.${ext}`;
+                    App.fileMap.set(copyPath, { content: item.content, language: ext, dirty: false, added: Date.now() });
+                    addedPaths.push(copyPath);
+                }
+            } else {
+                const lang = item.language || item.path.split('.').pop() || 'txt';
+                App.fileMap.set(item.path, { content: item.content, language: lang, dirty: false, added: Date.now() });
+                addedPaths.push(item.path);
+                added++;
+            }
+        }
+
+        if (App.rootDirHandle && addedPaths.length > 0 && confirm(`¿Crear ${addedPaths.length} archivos nuevos en la carpeta del disco?`)) {
+            createFilesOnDisk(addedPaths);
+        }
+
+        renderTree();
+        updateMetrics();
+        showToast(`✅ ${added} nuevos, ${conflicts} conflictos resueltos`);
+        document.getElementById('batchText').value = '';
+    }
+
+    async function createFilesOnDisk(paths) {
+        for (const path of paths) {
+            const file = App.fileMap.get(path);
+            if (!file) continue;
+            const parts = path.split('/');
+            let currentDir = App.rootDirHandle;
+            for (let i = 0; i < parts.length - 1; i++) {
+                currentDir = await currentDir.getDirectoryHandle(parts[i], { create: true });
+            }
+            const fileName = parts[parts.length - 1];
+            const fileHandle = await currentDir.getFileHandle(fileName, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(file.content);
+            await writable.close();
+            App.fileHandleMap.set(path, fileHandle);
+        }
+        showToast('💾 Archivos creados en disco');
+    }
+
+    // ---------- GESTIÓN DE ARCHIVOS ----------
+    async function saveCurrentFile() {
+        if (!App.activeFilePath) return;
+        const handle = App.fileHandleMap.get(App.activeFilePath);
+        if (!handle) {
+            showToast('⚠️ Archivo no vinculado a disco (pega primero carpeta)');
+            return;
+        }
+        const file = App.fileMap.get(App.activeFilePath);
+        const writable = await handle.createWritable();
+        await writable.write(file.content);
+        await writable.close();
+        App.fileMap.set(App.activeFilePath, { ...file, dirty: false });
+        updateMetrics();
+        renderTree();
+        showToast(`💾 Guardado: ${App.activeFilePath}`);
+        logEvent('Guardar archivo', 'saveCurrentFile');
+    }
+
+    // ---------- SESIÓN / ZIP ----------
+    function downloadZip() {
+        if (App.fileMap.size === 0) return;
+        const zip = new JSZip();
+        for (const [path, file] of App.fileMap) zip.file(path, file.content);
+        zip.generateAsync({ type: 'blob' }).then(blob => {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'proyecto.zip';
+            a.click();
+        });
+        logEvent('Descargar ZIP', 'downloadZip');
+    }
+
+    function saveSession() {
+        const data = {};
+        for (const [p, f] of App.fileMap) data[p] = { content: f.content, language: f.language };
+        const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'sesion_devsuite.json';
+        a.click();
+        logEvent('Guardar sesión', 'saveSession');
+    }
+
+    function loadSession(file) {
+        const reader = new FileReader();
+        reader.onload = e => {
+            try {
+                const data = JSON.parse(e.target.result);
+                for (const [p, obj] of Object.entries(data)) {
+                    App.fileMap.set(p, { content: obj.content, language: obj.language || p.split('.').pop(), dirty: false, added: Date.now() });
+                }
+                renderTree();
+                updateMetrics();
+                showToast(`Sesión cargada: ${Object.keys(data).length} archivos`);
+                logEvent('Cargar sesión', 'loadSession');
+            } catch { alert('JSON inválido'); }
+        };
+        reader.readAsText(file);
+    }
+
+    // ---------- PYODIDE ----------
+    async function loadPyodideAndInit() {
+        document.getElementById('pyodideStatus').textContent = '⏳ Cargando...';
+        try {
+            const pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.1/full/" });
+            await pyodide.runPythonAsync(`
+import ast
+def analyze_python(code):
+    tree = ast.parse(code)
+    functions = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+    return functions
+            `);
+            App.pyodide = pyodide;
+            App.pyodideReady = true;
+            document.getElementById('pyodideStatus').textContent = '✅ Python AST listo';
+        } catch (e) {
+            document.getElementById('pyodideStatus').textContent = '❌ Error Pyodide';
+        }
+    }
+
+    // ---------- LLAMADA A IA ----------
+    async function callAI(systemPrompt, userMessage) {
+        if (!App.aiConfig.apiKey && !App.aiConfig.isLocal) {
+            throw new Error('Falta clave API');
+        }
+        const headers = { 'Content-Type': 'application/json' };
+        if (!App.aiConfig.isLocal) {
+            headers['Authorization'] = `Bearer ${App.aiConfig.apiKey}`;
+        }
+        const body = JSON.stringify({
+            model: App.aiConfig.model,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userMessage }
+            ],
+            temperature: 0.2
+        });
+        const response = await fetch(App.aiConfig.apiUrl, { method: 'POST', headers, body });
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Error API (${response.status}): ${error}`);
+        }
+        const data = await response.json();
+        return data.choices[0].message.content;
+    }
+
+    async function explainCurrentFile() {
+        if (!App.activeFilePath || !App.editorView) {
+            showToast('Abre un archivo primero'); return;
+        }
+        const code = App.editorView.state.doc.toString();
+        const lang = App.activeFilePath.split('.').pop();
+        const systemPrompt = `Eres un programador experto en ${lang}. Explica el siguiente código de manera clara y estructurada. Describe el propósito general y luego detalla cada función o bloque importante.`;
+        try {
+            const explanation = await callAI(systemPrompt, `Archivo: ${App.activeFilePath}\nCódigo:\n${code}`);
+            document.getElementById('aiOutput').textContent = explanation;
+            logEvent('Explicar archivo', 'callAI');
+        } catch (e) {
+            document.getElementById('aiOutput').textContent = '❌ Error: ' + e.message;
+        }
+    }
+
+    async function generateYamlStructure() {
+        if (!App.activeFilePath || !App.editorView) {
+            showToast('Abre un archivo primero'); return;
+        }
+        const code = App.editorView.state.doc.toString();
+        const lang = App.activeFilePath.split('.').pop();
+        const systemPrompt = `Eres un generador de YAML. A partir del código proporcionado, genera un YAML con la siguiente estructura:
+archivo: <nombre>
+funciones:
+  - nombre: <nombre>
+    parametros: [<param1>, ...]
+    retorno: <tipo>
+    descripcion: <breve descripción>
+clases:
+  - nombre: <nombre>
+    metodos: ...
+Devuelve solo el YAML, sin texto adicional.`;
+        try {
+            const yamlText = await callAI(systemPrompt, `Archivo: ${App.activeFilePath}\nCódigo:\n${code}`);
+            document.getElementById('aiOutput').textContent = yamlText;
+            App.lastYaml = yamlText;
+            logEvent('Generar YAML', 'callAI');
+        } catch (e) {
+            document.getElementById('aiOutput').textContent = '❌ Error: ' + e.message;
+        }
+    }
+
+    function saveYamlToProject() {
+        if (!App.lastYaml) {
+            showToast('Primero genera un YAML'); return;
+        }
+        const base = App.activeFilePath ? App.activeFilePath.replace(/\.[^.]+$/, '') : 'estructura';
+        const yamlPath = `${base}.estructura.yml`;
+        App.fileMap.set(yamlPath, {
+            content: App.lastYaml,
+            language: 'yaml',
+            dirty: false,
+            added: Date.now()
+        });
+        renderTree();
+        updateMetrics();
+        showToast(`YAML guardado: ${yamlPath}`);
+        logEvent('Guardar YAML', 'saveYamlToProject');
+    }
+
+    // ---------- CONFIGURACIÓN DE IA ----------
+    function saveApiKeyToStorage() {
+        const key = document.getElementById('apiKeyInput').value.trim();
+        App.aiConfig.apiKey = key;
+        localStorage.setItem('ds_api_key', key);
+        showToast('Clave guardada');
+    }
+
+    function setLocalMode() {
+        App.aiConfig.isLocal = true;
+        App.aiConfig.apiUrl = 'http://localhost:11434/v1/chat/completions';
+        App.aiConfig.apiKey = '';
+        document.getElementById('modelInput').value = 'deepseek-coder:6.7b';
+        showToast('Configurado para Ollama local');
+    }
+
+    function restoreAIConfig() {
+        document.getElementById('apiKeyInput').value = App.aiConfig.apiKey;
+        document.getElementById('modelInput').value = App.aiConfig.model;
+    }
+
+    // ---------- ÁRBOL DE FLUJO DE EVENTOS ----------
+    function renderFlowTree() {
+        const container = document.getElementById('flowTreeContainer');
+        if (App.eventLog.length === 0) {
+            container.innerHTML = '<em>No hay eventos registrados aún. Interactúa con la aplicación.</em>';
+            return;
+        }
+
+        // Agrupar por target (destino) y contar orígenes únicos
+        const destMap = new Map(); // target -> Set de origins
+        for (const entry of App.eventLog) {
+            if (!destMap.has(entry.target)) destMap.set(entry.target, new Set());
+            destMap.get(entry.target).add(entry.origin);
+        }
+
+        // Construir HTML como árbol colapsable
+        let html = '<div style="margin-bottom:8px; font-weight:600;">📊 Eventos registrados (agrupados por destino)</div>';
+        for (const [target, origins] of destMap.entries()) {
+            const fanIn = origins.size;
+            let colorClass = 'fan-low';
+            if (fanIn >= 5) colorClass = 'fan-high';
+            else if (fanIn >= 3) colorClass = 'fan-mid';
+
+            html += `<details open>
+                <summary class="flow-dest ${colorClass}">🎯 ${target} (${fanIn} origen${fanIn > 1 ? 'es' : ''})</summary>`;
+            for (const origin of origins) {
+                html += `<div class="flow-origin">⬅️ ${origin}</div>`;
+            }
+            html += '</details>';
+        }
+
+        container.innerHTML = html;
+    }
+
+    // ---------- INICIALIZACIÓN ----------
+    window.onload = () => {
+        // Pestañas de extracción / inserción
+        document.getElementById('subBatch').onclick = () => {
+            document.getElementById('subBatch').classList.add('active');
+            document.getElementById('subFragment').classList.remove('active');
+            document.getElementById('batchArea').style.display = 'block';
+            document.getElementById('fragmentArea').style.display = 'none';
+        };
+        document.getElementById('subFragment').onclick = () => {
+            document.getElementById('subFragment').classList.add('active');
+            document.getElementById('subBatch').classList.remove('active');
+            document.getElementById('batchArea').style.display = 'none';
+            document.getElementById('fragmentArea').style.display = 'block';
+        };
+
+        // Botones principales
+        document.getElementById('exportChatBtn').onclick = exportToChat;
+        document.getElementById('processBatchBtn').onclick = () => {
+            const text = document.getElementById('batchText').value;
+            const overwrite = document.getElementById('overwriteBatch').checked;
+            extractFilesFromText(text, overwrite);
+        };
+        document.getElementById('saveCurrentFileBtn').onclick = saveCurrentFile;
+        document.getElementById('downloadZipBtn').onclick = downloadZip;
+        document.getElementById('saveSessionBtn').onclick = saveSession;
+        document.getElementById('loadSessionBtn').onclick = () => document.getElementById('loadSessionInput').click();
+        document.getElementById('loadSessionInput').onchange = e => {
+            if (e.target.files[0]) loadSession(e.target.files[0]);
+            e.target.value = '';
+        };
+        document.getElementById('clearAllBtn').onclick = () => {
+            if (confirm('¿Borrar todo?')) {
+                App.fileMap.clear();
+                App.fileHandleMap.clear();
+                App.rootDirHandle = null;
+                if (App.editorView) App.editorView.destroy();
+                document.getElementById('editorContainer').innerHTML = '';
+                App.activeFilePath = null;
+                renderTree();
+                updateMetrics();
+            }
+        };
+        document.getElementById('openFolderBtn').onclick = async () => {
+            if (!window.showDirectoryPicker) {
+                showToast('Tu navegador no soporta esta API'); return;
+            }
+            try {
+                App.rootDirHandle = await window.showDirectoryPicker();
+                App.fileHandleMap.clear();
+                App.fileMap.clear();
+                await readDirectoryRecursively(App.rootDirHandle, '');
+                renderTree();
+                updateMetrics();
+                showToast('📁 Carpeta vinculada');
+                logEvent('Abrir carpeta', 'openFolder');
+            } catch (e) {
+                if (e.name !== 'AbortError') console.error(e);
+            }
+        };
+        document.getElementById('loadPyodideBtn').onclick = loadPyodideAndInit;
+
+        async function readDirectoryRecursively(dirHandle, currentPath) {
+            for await (const entry of dirHandle.values()) {
+                const entryPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+                if (entry.kind === 'file') {
+                    const ext = entry.name.split('.').pop().toLowerCase();
+                    if (!['py','js','html','css','json','yaml','yml','txt','md','cpp','c','java','sh'].includes(ext)) continue;
+                    const file = await entry.getFile();
+                    const content = await file.text();
+                    App.fileMap.set(entryPath, { content, language: ext, dirty: false });
+                    App.fileHandleMap.set(entryPath, entry);
+                } else if (entry.kind === 'directory') {
+                    await readDirectoryRecursively(entry, entryPath);
+                }
+            }
+        }
+
+        // Pestañas del panel lateral
+        document.getElementById('tabConflicts').onclick = () => switchSidePanel('conflicts');
+        document.getElementById('tabAI').onclick = () => switchSidePanel('ai');
+        document.getElementById('tabFlows').onclick = () => switchSidePanel('flows');
+
+        function switchSidePanel(panel) {
+            document.getElementById('tabConflicts').classList.toggle('active', panel === 'conflicts');
+            document.getElementById('tabAI').classList.toggle('active', panel === 'ai');
+            document.getElementById('tabFlows').classList.toggle('active', panel === 'flows');
+            document.getElementById('panelConflicts').classList.toggle('active', panel === 'conflicts');
+            document.getElementById('panelAI').classList.toggle('active', panel === 'ai');
+            document.getElementById('panelFlows').classList.toggle('active', panel === 'flows');
+            if (panel === 'flows') {
+                renderFlowTree();
+            }
+        }
+
+        // IA - configuración y acciones
+        document.getElementById('saveApiKeyBtn').onclick = saveApiKeyToStorage;
+        document.getElementById('useLocalBtn').onclick = setLocalMode;
+        document.getElementById('explainFileBtn').onclick = explainCurrentFile;
+        document.getElementById('generateYamlBtn').onclick = generateYamlStructure;
+        document.getElementById('saveYamlBtn').onclick = saveYamlToProject;
+
+        // Atajos de teclado
+        window.addEventListener('keydown', e => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                e.preventDefault();
+                saveCurrentFile();
+            }
+        });
+
+        restoreAIConfig();
+
+        // Demo inicial
+        if (App.fileMap.size === 0) {
+            App.fileMap.set('src/utils.js', { content: 'function suma(a,b) { return a+b; }', language: 'js', dirty: false });
+            App.fileMap.set('src/main.py', { content: 'def hola():\n    print("Hola")', language: 'py', dirty: false });
+        }
+        renderTree();
+        updateMetrics();
+        if (App.fileMap.has('src/main.py')) openFile('src/main.js');
+    };
+</script>
+</body>
+</html>
