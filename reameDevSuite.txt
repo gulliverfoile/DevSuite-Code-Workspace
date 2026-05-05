@@ -154,3 +154,40 @@ Botón “Revisar con segunda IA” (doble ciego) usando el mismo flujo.
 DevSuite Fusion es una navaja suiza para el desarrollador que trabaja con asistentes de IA. Convierte el ida y vuelta del chat en un flujo de trabajo cómodo, manteniendo el control manual y permitiendo análisis automáticos. Es ligero, portable y extensible.
 
 Si quieres añadir alguna funcionalidad concreta o necesitas aclarar algún punto del código, avísame y lo mejoramos juntos.
+
+📘 Apéndice: Nuevo módulo Lint
+✅ ¿Qué hace?
+Analiza el archivo abierto en el editor (Python o JavaScript) según un diccionario de reglas.
+
+Detecta problemas como líneas largas, print/console.log en producción, funciones extensas, complejidad alta.
+
+Si Pyodide está cargado, utiliza el AST de Python para contar líneas por función y ramas (if/for/while).
+
+Para JavaScript emplea Acorn para detectar console.log y funciones largas.
+
+Los resultados se agrupan en un acordeón (igual que en el analizador de falacias).
+
+Al hacer clic en un problema, se muestra una explicación didáctica.
+
+🧪 Reglas incluidas
+Lenguaje	Regla	Descripción
+Python	E501	Línea > 100 caracteres
+Python	E225	Operador sin espacios
+Python	C901	Alta complejidad ciclomática (más de 5 ramas)
+Python	F001	Uso de print()
+Python	F003	Función > 30 líneas
+JavaScript	E501	Línea > 100 caracteres
+JavaScript	C001	console.log
+JavaScript	F003	Función > 30 líneas
+⚠️ Limitaciones / Fallos conocidos
+El AST de Python depende de Pyodide: si no se ha cargado, solo aplica las reglas de línea.
+
+La complejidad se calcula con un contador simple de if/for/while; no es ciclomática real, pero da una aproximación.
+
+Las reglas estructurales de JavaScript sólo detectan console.log y longitud; el análisis AST con Acorn es muy básico.
+
+Para otros lenguajes (HTML, CSS, JSON) no hay reglas definidas; se puede extender el diccionario.
+
+El lint automático al cambiar de archivo puede relentizar si el archivo es enorme.
+
+Si quieres ampliar el diccionario con más reglas (como las de PEP 8 o ESLint), solo tienes que añadir objetos al buildLintRules(). El sistema ya está montado.
